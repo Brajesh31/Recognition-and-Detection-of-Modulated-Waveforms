@@ -71,4 +71,4 @@ The trained RandomForestClassifier achieves an accuracy of 80% on test data.
 ## 📜 License
 This project is open-source and licensed under the MIT License.
 
-Last updated: 2026-10-21 22:06 UTC
+Last updated: 2026-10-22 01:13 UTC
