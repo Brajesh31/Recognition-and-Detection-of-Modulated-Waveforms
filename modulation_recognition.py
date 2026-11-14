@@ -1,133 +1,114 @@
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
-from scipy.stats import skew, kurtosis
-import seaborn as sns
+"""Train and use a Random Forest classifier for digital modulation recognition."""
+from __future__ import annotations
+import argparse
+from pathlib import Path
 import joblib
-import os
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from modulation_utils import MOD_TYPES, TIME_FRAMES, extract_features, generate_signal, load_signal_file
 
-# Constants
-MOD_TYPES = ['QPSK', '8PSK', '16APSK', '32APSK']  # List of supported modulations
-MODEL_FILE = 'modulation_model.pkl'  # File to save/load trained model
-TIME_FRAMES = 1000  # Number of time samples per signal
+MODEL_FILE = Path("modulation_model.pkl")
 
-# Functions to generate modulation signals (same as in the generator script)
-def generate_qpsk(n_samples):
-    """Generate QPSK modulated signal."""
-    symbols = np.array([1+1j, 1-1j, -1+1j, -1-1j]) / np.sqrt(2)
-    return np.random.choice(symbols, n_samples)
+def generate_dataset(n_samples_per_mod: int, samples_per_signal: int = TIME_FRAMES,
+                     seed: int | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Build a balanced feature dataset for all supported modulation classes."""
+    if n_samples_per_mod < 2 or samples_per_signal < 2:
+        raise ValueError("Sample counts must both be at least 2.")
+    rng = np.random.default_rng(seed)
+    features, labels = [], []
+    for modulation in MOD_TYPES:
+        for _ in range(n_samples_per_mod):
+            features.append(extract_features(generate_signal(modulation, samples_per_signal, rng)))
+            labels.append(modulation)
+    return np.vstack(features), np.asarray(labels)
 
-def generate_psk(n_samples, M):
-    """Generate M-PSK modulated signal."""
-    angles = np.linspace(0, 2 * np.pi, M, endpoint=False)
-    symbols = np.exp(1j * angles)
-    return np.random.choice(symbols, n_samples)
-
-def generate_apsk(n_samples, M):
-    """Generate M-APSK modulated signal."""
-    if M == 16:
-        radii = [1, 2]
-    elif M == 32:
-        radii = [1, 2, 3]
-    else:
-        raise ValueError("Unsupported M for APSK. Use 16 or 32.")
-
-    symbols = []
-    for r in radii:
-        angles = np.linspace(0, 2 * np.pi, M // len(radii), endpoint=False)
-        symbols.extend(r * np.exp(1j * angles))
-
-    return np.random.choice(symbols, n_samples)
-
-# Feature extraction
-def extract_features(data):
-    """Extract statistical features from the real and imaginary parts of a signal."""
-    features = []
-    real_part = data.real
-    imag_part = data.imag
-    magnitude = np.abs(data)
-    phase = np.angle(data)
-
-    # Statistical features
-    features += [
-        np.mean(real_part), np.std(real_part), np.mean(imag_part), np.std(imag_part),
-        np.mean(magnitude), np.std(magnitude), np.mean(phase), np.std(phase),
-        skew(real_part), kurtosis(real_part), skew(imag_part), kurtosis(imag_part),
-        np.min(real_part), np.max(real_part), np.min(imag_part), np.max(imag_part),
-        np.min(magnitude), np.max(magnitude), np.min(phase), np.max(phase)
-    ]
-    
-    return features
-
-# Generate dataset
-def generate_dataset(n_samples_per_mod):
-    """Create a dataset of modulated signals and their corresponding labels."""
-    data, labels = [], []
-    for mod_type in MOD_TYPES:
-        if mod_type == 'QPSK':
-            signals = [generate_qpsk(TIME_FRAMES) for _ in range(n_samples_per_mod)]
-        elif mod_type == '8PSK':
-            signals = [generate_psk(TIME_FRAMES, 8) for _ in range(n_samples_per_mod)]
-        elif mod_type == '16APSK':
-            signals = [generate_apsk(TIME_FRAMES, 16) for _ in range(n_samples_per_mod)]
-        elif mod_type == '32APSK':
-            signals = [generate_apsk(TIME_FRAMES, 32) for _ in range(n_samples_per_mod)]
-        else:
-            raise ValueError("Unsupported modulation type.")
-
-        for signal in signals:
-            data.append(extract_features(signal))
-            labels.append(mod_type)
-    
-    return np.array(data), np.array(labels)
-
-# Model training
-def train_model(X_train, y_train):
-    """Train a RandomForest model for modulation classification."""
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
+def train_model(features: np.ndarray, labels: np.ndarray, seed: int = 42) -> RandomForestClassifier:
+    """Fit a deterministic Random Forest classifier."""
+    if features.ndim != 2 or features.shape[0] != len(labels):
+        raise ValueError("features must be a 2D array with one label per row.")
+    if len(np.unique(labels)) < 2:
+        raise ValueError("Training requires at least two modulation classes.")
+    model = RandomForestClassifier(n_estimators=200, random_state=seed, class_weight="balanced", n_jobs=1)
+    model.fit(features, labels)
     return model
 
-# Save and load the model
-def save_model(model):
-    """Save the trained model to a file."""
-    joblib.dump(model, MODEL_FILE)
+def save_model(model: RandomForestClassifier, path: str | Path = MODEL_FILE) -> Path:
+    """Persist a trained model."""
+    model_path = Path(path)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, model_path)
+    return model_path
 
-def load_model():
-    """Load the trained model if it exists."""
-    return joblib.load(MODEL_FILE) if os.path.exists(MODEL_FILE) else None
+def load_model(path: str | Path = MODEL_FILE) -> RandomForestClassifier:
+    """Load a previously saved model from a trusted local path."""
+    model_path = Path(path)
+    if not model_path.is_file():
+        raise FileNotFoundError(f"Model file not found: {model_path}. Train a model first.")
+    model = joblib.load(model_path)
+    if not hasattr(model, "predict") or not hasattr(model, "n_features_in_"):
+        raise ValueError("The selected file does not contain a compatible classifier.")
+    return model
 
-# Main interactive function
-def interactive_program():
-    """Command-line interface for training and testing the model."""
-    print("Welcome to Modulation Detection System")
+def evaluate_model(model: RandomForestClassifier, features: np.ndarray, labels: np.ndarray) -> dict:
+    """Return test metrics and a classification report."""
+    predictions = model.predict(features)
+    return {
+        "accuracy": accuracy_score(labels, predictions),
+        "confusion_matrix": confusion_matrix(labels, predictions, labels=MOD_TYPES),
+        "classification_report": classification_report(labels, predictions, labels=MOD_TYPES, zero_division=0),
+    }
 
-    while True:
-        print("\nOptions:")
-        print("1. Generate dataset and train model")
-        print("2. Test model with an input file")
-        print("3. Exit")
+def train_and_evaluate(n_samples_per_mod: int = 200, samples_per_signal: int = TIME_FRAMES,
+                       seed: int = 42) -> tuple[RandomForestClassifier, dict]:
+    """Evaluate on a stratified holdout, then fit the final model on all records."""
+    features, labels = generate_dataset(n_samples_per_mod, samples_per_signal, seed)
+    x_train, x_test, y_train, y_test = train_test_split(
+        features, labels, test_size=0.25, random_state=seed, stratify=labels
+    )
+    evaluation_model = train_model(x_train, y_train, seed)
+    metrics = evaluate_model(evaluation_model, x_test, y_test)
+    return train_model(features, labels, seed), metrics
 
-        choice = input("Enter your choice: ")
+def predict_file(signal_path: str | Path, model_path: str | Path = MODEL_FILE) -> tuple[str, dict[str, float]]:
+    """Predict the modulation class for one real/imaginary CSV signal file."""
+    model = load_model(model_path)
+    features = extract_features(load_signal_file(signal_path)).reshape(1, -1)
+    if features.shape[1] != model.n_features_in_:
+        raise ValueError("Signal feature count does not match the saved model. Retrain the model.")
+    prediction = str(model.predict(features)[0])
+    probabilities = model.predict_proba(features)[0] if hasattr(model, "predict_proba") else []
+    confidence = {str(label): float(probability) for label, probability in zip(model.classes_, probabilities)}
+    return prediction, confidence
 
-        if choice == '1':
-            n_samples = int(input("Enter number of samples per modulation type: "))
-            data, labels = generate_dataset(n_samples)
-            model = train_model(data, labels)
-            save_model(model)
-            print("Training complete. Model saved.")
-
-        elif choice == '2':
-            print("Feature extraction and classification for input signal will be implemented here.")
-
-        elif choice == '3':
-            print("Exiting program.")
-            break
-
-        else:
-            print("Invalid choice. Try again.")
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    train_parser = subparsers.add_parser("train", help="Generate synthetic data, evaluate, and save a model.")
+    train_parser.add_argument("--samples-per-class", type=int, default=200)
+    train_parser.add_argument("--signal-length", type=int, default=TIME_FRAMES)
+    train_parser.add_argument("--seed", type=int, default=42)
+    train_parser.add_argument("--model", default=str(MODEL_FILE))
+    predict_parser = subparsers.add_parser("predict", help="Classify a CSV file with real,imaginary columns.")
+    predict_parser.add_argument("signal_file")
+    predict_parser.add_argument("--model", default=str(MODEL_FILE))
+    args = parser.parse_args()
+    if args.command == "train":
+        model, metrics = train_and_evaluate(args.samples_per_class, args.signal_length, args.seed)
+        saved_path = save_model(model, args.model)
+        print(f"Holdout accuracy: {metrics['accuracy']:.2%}")
+        print(metrics["classification_report"])
+        print("Confusion matrix (rows=true, columns=predicted, order=MOD_TYPES):")
+        print(metrics["confusion_matrix"])
+        print(f"Model saved to: {saved_path}")
+    else:
+        prediction, confidence = predict_file(args.signal_file, args.model)
+        print(f"Predicted modulation: {prediction}")
+        if confidence:
+            print("Class probabilities:")
+            for label, probability in sorted(confidence.items(), key=lambda item: item[1], reverse=True):
+                print(f"  {label}: {probability:.2%}")
 
 if __name__ == "__main__":
-    interactive_program()
+    main()
