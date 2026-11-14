@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an improvement to the modulation recognition project.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or research need
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: How should this be tested?
+    validations:
+      required: true
