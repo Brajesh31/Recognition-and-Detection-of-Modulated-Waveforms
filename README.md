@@ -37,7 +37,7 @@ A Python project for generating synthetic complex baseband samples and classifyi
 ## Supported modulation types
 
 | Label | Family | Constellation order |
-|---|---|---:|
+| --- | --- | ---: |
 | QPSK | Quadrature phase-shift keying | 4 |
 | 8PSK | 8-ary phase-shift keying | 8 |
 | 16APSK | 16-ary amplitude and phase-shift keying | 16 |
